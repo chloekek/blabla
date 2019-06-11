@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+
+trap 'jobs -p | xargs kill' EXIT
+sleep infinity &
+
+# Entry point for building the system. As part of the build, the system is
+# tested. If any of the tests fail, the system cannot be built.
+
+# This program must be invoked as ./build from the repository root; i.e. not
+# directly. Invoking it directly would potentially run it outside of a Nix
+# shell, which would disasterously depend on globally installed software.
+
+# First, verify that we were indeed called as ./build, not as tools/build. We
+# do this by checking that the CALLED_FROM_BUILD environment variable exists;
+# it should be set by ./build.
+if [[ -z ${CALLED_FROM_BUILD+x} ]]; then
+    2>&1 echo 'Do not invoke tools/build directly; invoke it as: ./build'
+    exit 1
+fi
+
+# The user must give a directory name in which temporary data will be stored.
+# This is not optional and there is no default. This helps the user understand
+# what is going on.
+if (( $# != 1 )); then
+    2>&1 echo 'Pass (only) a temporary data directory to ./build'
+    exit 1
+fi
+temporaryData=$1/concreteBuild
+rm -rf "$temporaryData"
+mkdir --parents "$temporaryData"
+
+# Set up the PostgreSQL database for testing. Create a new PostgreSQL database
+# cluster, start the PostgreSQL DBMS, set up the roles and database, run the
+# migrations and finally set the environment variables for the system to use to
+# connect to the database.
+
+    # Create a directory for the database cluster. This environment variable is
+    # used by initdb and postgres.
+    mkdir "$temporaryData/pgdata"
+
+    # These environment variables are used by almost all the PostgreSQL tools,
+    # including libpq, and are the same for every connection that we make.
+    export PGHOST=localhost
+    export PGPORT=9000
+    export PGDATA=$temporaryData/pgdata
+
+    # Create a database cluster. Do not fsync it; that would take too much
+    # time. Choose a constant name for the superuser, so that this works across
+    # machines.
+    initdb --no-sync --username=postgres
+
+    # Start PostgreSQL as a non-daemon with fsync disabled. PostgreSQL creates
+    # a lock file. We tell it to create it in our temporary directory.
+    mkdir "$temporaryData/pgaux"
+    postgres -F -k "$temporaryData/pgaux" &
+    while ! PGUSER=postgres pg_isready; do sleep 0.1; done
+
+    # Set up the database and its roles. See the database/setup program for
+    # more information. Run it as the postgres role; we need those privileges.
+    PGUSER=postgres database/setup
+
+    # Run the schema migrations as the migrations role. This tests that we can
+    # run all the migrations, and prepares the database for further testing.
+    (
+        export PGUSER=concreteMigrations
+        export PGPASSWORD=$PGUSER
+        export PGDATABASE=concrete
+        cd database
+        sqitch deploy
+    )
+
+    # Set the database credentials so that we can connect with the database and
+    # run the system.
+    export PGUSER=concreteSystem
+    export PGPASSWORD=$PGUSER
+    export PGDATABASE=concrete
+
+    # Seed the database with test data.
+    psql < database/seed.sql
+
+# Install the dependencies that are not managed through Nix. At some point we
+# should manage these through Nix, but this is too much work for now.
+COMPOSER=tools/composer.json composer install
+
+# Run the unit tests. Unit tests are in the same files as the code that is
+# under test, i.e. in the source folder.
+php <<EOF
+<?php
+require_once 'tools/bootstrap.php';
+$(
+    find source -type f -name '*.php' -print0 | \
+        xargs -0 printf 'require_once '"'"'%s'"'"';\n'
+)
+UnitTests::run();
+EOF

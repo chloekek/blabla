@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# Set up the database so that it has all the required roles and extensions. In
+# addition, drop the public schema, which is useless.
+
+psql -d postgres <<'SQL'
+    -- Set up two roles, the migrations role that owns the database and runs
+    -- migrations, and the system role, which is the system.
+    CREATE ROLE "concreteMigrations" LOGIN PASSWORD 'concreteMigrations';
+    CREATE ROLE "concreteSystem" LOGIN PASSWORD 'concreteSystem';
+
+    CREATE DATABASE concrete OWNER "concreteMigrations";
+SQL
+
+psql -d concrete <<'SQL'
+    DROP SCHEMA public;
+SQL

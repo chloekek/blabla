@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+
+# Run tools/build in a Nix shell. The Nix shell ensures that all the
+# dependencies listed in default.nix are in scope, e.g. in PATH.
+
+# The nix-shell program does not take a program and a list of arguments; it
+# takes a command. We need to build this command safely, so that no parameter
+# expansion or word splitting occurs where it should not. To do this, we use
+# printf with %q, which will quote the argument so that it is a valid Bash
+# string literal.
+command=tools/build
+for argument in "$@"; do
+    printf -v command '%s %q' "$command" "$argument"
+done
+
+# We set the CALLED_FROM_BUILD environment variable. This tells tools/build
+# that it was called from this program, rather than directly.
+export CALLED_FROM_BUILD=
+
+# The nix-shell program will automatically use default.nix from the current
+# directory. We pass the command we just built, so that it gets run inside the
+# proper environment.
+nix-shell --run "$command"

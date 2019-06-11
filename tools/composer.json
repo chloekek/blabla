@@ -1,0 +1,10 @@
+{
+    "config": {
+        "vendor-dir": "vendor/composer"
+    },
+    "autoload": {
+        "psr-4": {
+            "concrete\\": ["source/concrete/"]
+        }
+    }
+}
